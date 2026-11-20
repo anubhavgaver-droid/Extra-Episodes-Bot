@@ -30,6 +30,7 @@ async def panel():
         [IKB("📧 Gmail + App Password", callback_data="a:gmail")],
         [IKB("🧪 Test Gmail (Inbox Read)", callback_data="a:test")],
         [IKB("💸 UPI ID / Name", callback_data="a:upi")],
+        [IKB("🖼 Welcome Photo", callback_data="a:wphoto"), IKB("📝 Welcome Text", callback_data="a:wtext")],
         [IKB("➕ Add Files", callback_data="a:add"), IKB("📦 Products", callback_data="a:items")],
         [IKB("📢 Log Channel", callback_data="a:logchat"), IKB("📜 Recent Logs", callback_data="a:logs")],
         [IKB("👤 Add Admin", callback_data="a:addadmin"), IKB("🗑 Remove Admin", callback_data="a:rmadmin")],
@@ -63,6 +64,9 @@ async def cancel_cmd(cl, m):
 PROMPTS = {
     "upi": ("upi", "💸 Bhejo: `upi@bank | Naam`"),
     "gmail": ("gmail", "📧 Apna Gmail address bhejo."),
+    "wphoto": ("wphoto", "🖼 Welcome message ke liye **photo** bhejo.\n\nPhoto hatane ke liye `0` bhejo."),
+    "wtext": ("wtext", "📝 Naya welcome text bhejo. User ka naam dikhane ke liye `{name}` likho. "
+                       "Bold ke liye `**text**`.\n\nDefault par wapas jaane ke liye `0` bhejo."),
     "addadmin": ("addadmin", "👤 Naye admin ki Telegram numeric ID bhejo."),
     "rmadmin": ("rmadmin", "🗑 Hatane wale admin ki numeric ID bhejo."),
     "logchat": ("logchat", "📢 Log channel set karne ke liye:\n1) Bot ko channel mein **admin** banao\n"
@@ -71,7 +75,7 @@ PROMPTS = {
 }
 
 
-@app.on_callback_query(filters.regex(r"^a:(auto|maint|manual|upi|gmail|addadmin|rmadmin|test|logs|logchat)$"))
+@app.on_callback_query(filters.regex(r"^a:(auto|maint|manual|upi|gmail|wphoto|wtext|addadmin|rmadmin|test|logs|logchat)$"))
 async def admin_cb(cl, q):
     uid = q.from_user.id
     if not await is_admin(uid):
@@ -158,6 +162,21 @@ async def admin_flow(cl, m):
         await setcfg(gmail=st["gmail"], app_pw=fernet.encrypt(pw.encode()).decode())
         state.pop(uid)
         return await app.send_message(uid, "✅ Gmail login test pass, save ho gaya. Ab 🧪 Test Gmail dabake inbox check karo. /admin")
+    if step == "wphoto":
+        if m.photo:
+            await setcfg(welcome_photo=m.photo.file_id)
+        elif txt == "0":
+            await setcfg(welcome_photo="")
+        else:
+            return await m.reply("Photo bhejo (ya hatane ke liye 0).")
+        state.pop(uid)
+        return await m.reply("✅ Welcome photo update ho gaya. /start se preview dekho.")
+    if step == "wtext":
+        if not m.text:
+            return await m.reply("Text bhejo.")
+        await setcfg(welcome_text="" if txt == "0" else m.text.markdown)
+        state.pop(uid)
+        return await m.reply("✅ Welcome text update ho gaya. /start se preview dekho.")
     if step in ("addadmin", "rmadmin"):
         if not txt.isdigit():
             return await m.reply("Sirf numeric ID bhejo.")

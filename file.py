@@ -3,20 +3,48 @@ import secrets
 from pyrogram import filters
 from pyrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB
 import core as C
-from core import app, state, CMDS, cfg, is_admin, fmt, fid, log, user_line
+from core import app, state, CMDS, cfg, is_admin, fmt, fid, log, user_line, sc, dev_row
 
 
 async def deliver(uid, item_id):
     it = await C.db.items.find_one({"_id": item_id})
     if not it:
-        return await app.send_message(uid, "⚠️ Product nahi mila, admin se contact karo.")
-    await app.send_message(uid, "✅ Payment verified! Aapki files bhej raha hoon...")
+        return await app.send_message(uid, "⚠️ " + sc("product not found. please contact the admin."))
+    await app.send_message(uid, "✅ " + sc("payment verified! sending your files..."))
     for f in it["files"]:
         try:
             await app.send_cached_media(uid, f)
         except Exception as e:
             print("send error", e)
             await log(f"⚠️ File send error to {uid}: {e}")
+    await app.send_message(uid, "🎉 " + sc("thank you for your purchase! enjoy."),
+                           reply_markup=IKM([dev_row()]))
+
+
+DEFAULT_WELCOME = (
+    "✨ " + sc("welcome") + " {name} ✨\n\n"
+    "📚 **" + sc("extra episode store") + "**\n"
+    + sc("this bot is perfect for selling extra episodes of your favourite stories.") + "\n\n"
+    "⚡ " + sc("instant auto verification") + "\n"
+    "🔒 " + sc("safe & secure upi payments") + "\n"
+    "📩 " + sc("instant file delivery") + "\n\n"
+    "👇 " + sc("open a link shared by the owner to get started.")
+)
+
+
+async def send_welcome(m):
+    c = await cfg()
+    name = m.from_user.first_name or "friend"
+    text = (c["welcome_text"] or DEFAULT_WELCOME).replace("{name}", name)
+    kb = IKM([dev_row()])
+    if c["welcome_photo"]:
+        try:
+            if len(text) <= 1000:
+                return await m.reply_photo(c["welcome_photo"], caption=text, reply_markup=kb)
+            await m.reply_photo(c["welcome_photo"])
+        except Exception as e:
+            print("welcome photo error", e)
+    await m.reply(text, reply_markup=kb)
 
 
 @app.on_message(filters.command("start") & filters.private)
@@ -24,17 +52,22 @@ async def start(cl, m):
     u = m.from_user
     arg = m.command[1] if len(m.command) > 1 else ""
     r = await C.db.users.update_one({"_id": u.id}, {"$set": {"name": user_line(u)}}, upsert=True)
-    await log(("🆕 New user started the bot" if r.upserted_id is not None else "▶️ User started the bot")
-              + f"\n{user_line(u)}" + (f"\nLink: {arg}" if arg else ""))
+    if r.upserted_id is not None:  # log sirf pehli baar (naya user register hone par)
+        await log("🆕 New user registered\n" + user_line(u) + (f"\nLink: {arg}" if arg else ""))
     if arg.startswith("item_"):
         it = await C.db.items.find_one({"_id": arg[5:]})
         if not it:
-            return await m.reply("❌ Link invalid hai.")
-        kb = IKM([[IKB("⚡ Automatic", callback_data=f"u:auto:{it['_id']}"),
-                   IKB("🧾 Manual", callback_data=f"u:man:{it['_id']}")]])
-        return await m.reply(f"📦 **{it['title']}**\n💰 Price: ₹{fmt(it['price'])}\n"
-                             f"📁 Files: {len(it['files'])}\n\nChoose your payment method 👇", reply_markup=kb)
-    await m.reply("👋 Welcome! Koi product link kholo.")
+            return await m.reply("❌ " + sc("this link is invalid or expired."))
+        kb = IKM([[IKB("⚡ " + sc("automatic"), callback_data=f"u:auto:{it['_id']}"),
+                   IKB("🧾 " + sc("manual"), callback_data=f"u:man:{it['_id']}")], dev_row()])
+        return await m.reply(
+            "✦ " + sc("extra episode sharing") + " ✦\n\n"
+            f"📦 **{it['title']}**\n"
+            f"💰 {sc('price')}: **₹{fmt(it['price'])}**\n"
+            f"📁 {sc('files')}: {len(it['files'])}\n\n"
+            + sc("share extra episodes of any story — get any link & channel access, delivered instantly.")
+            + "\n\n" + sc("choose your payment method") + " 👇", reply_markup=kb)
+    await send_welcome(m)
 
 
 @app.on_message(filters.command("done") & filters.private)

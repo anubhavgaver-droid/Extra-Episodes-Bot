@@ -8,7 +8,8 @@ from pymongo.errors import DuplicateKeyError
 from pyrogram import filters
 from pyrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB
 import core as C
-from core import (app, state, CMDS, PAY_WINDOW, fernet, OWNER_ID, cfg, is_admin, fmt, log, ist, user_line)
+from core import (app, state, CMDS, PAY_WINDOW, fernet, OWNER_ID, cfg, is_admin, fmt, log, ist, user_line,
+                  sc, temp, schedule_delete, dev_row)
 from file import deliver
 
 
@@ -124,29 +125,35 @@ def test_login(gmail, pw):
 
 
 # ---------------- automatic payment ----------------
+FRAMES = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]  # ghoomta hua circle
+verifying = set()
+
+
 @app.on_callback_query(filters.regex(r"^u:auto:"))
 async def user_auto(cl, q):
     c = await cfg()
     if c["maint"] or not c["auto_on"]:
-        return await q.answer("🛠 Automatic payment abhi Under Maintenance hai. Manual use karo.", show_alert=True)
+        return await q.answer("🛠 " + sc("automatic payment is under maintenance. please use manual."),
+                              show_alert=True)
     it = await C.db.items.find_one({"_id": q.data.split(":")[2]})
     if not it:
-        return await q.answer("Product nahi mila", show_alert=True)
+        return await q.answer(sc("product not found"), show_alert=True)
     await q.answer()
     uid = q.from_user.id
-    wait = await app.send_message(uid, "⏳ Invoice generate ho raha hai, please wait...")
+    wait = await app.send_message(uid, "⏳ " + sc("invoice is generating, please wait..."))
     amount = float(it["price"])
     oid = secrets.token_hex(4)
     await C.db.orders.insert_one({"_id": oid, "uid": uid, "item": it["_id"], "amount": amount,
                                   "mode": "auto", "status": "pending", "ts": time.time()})
     qr = make_qr(upi_link(c, amount, oid))
     await wait.delete()
-    kb = IKM([[IKB("✅ Verify Payment", callback_data=f"u:ver:{oid}")],
-              [IKB("✖️ Cancel", callback_data=f"u:cx:{oid}")]])
+    kb = IKM([[IKB("✅ " + sc("verify payment"), callback_data=f"u:ver:{oid}")],
+              [IKB("✖️ " + sc("cancel"), callback_data=f"u:cx:{oid}")], dev_row()])
     await app.send_photo(uid, qr, reply_markup=kb, caption=(
-        f"🧾 **Order** `{oid}`\n📦 {it['title']}\n💰 Pay: **₹{amount:.2f}**\n"
-        f"🏦 UPI: `{c['upi_id']}`\n⏱ Valid for 10 minutes\n\n"
-        "QR scan karke pay karo, phir Verify dabao."))
+        f"🧾 {sc('order')} `{oid}`\n📦 {sc('item')}: {it['title']}\n"
+        f"💰 {sc('amount')}: **₹{amount:.2f}**\n🏦 {sc('upi id')}: `{c['upi_id']}`\n"
+        f"⏱ {sc('valid for 10 minutes')}\n\n"
+        + sc("scan the qr & pay the exact amount, then tap verify.")))
     await log(f"🧾 Auto order {oid}: {user_line(q.from_user)} → {it['title']} ₹{fmt(amount)}")
 
 
@@ -154,52 +161,71 @@ async def user_auto(cl, q):
 async def user_cancel(cl, q):
     await C.db.orders.update_one({"_id": q.data.split(":")[2], "uid": q.from_user.id, "status": "pending"},
                                  {"$set": {"status": "cancelled"}})
-    await q.answer("Cancelled")
+    await q.answer()
     await q.message.delete()
 
 
 @app.on_callback_query(filters.regex(r"^u:ver:"))
 async def user_verify(cl, q):
+    uid = q.from_user.id
     oid = q.data.split(":")[2]
+    await q.answer()  # popup nahi — neeche message aayega
     o = await C.db.orders.find_one({"_id": oid})
-    if not o or o["uid"] != q.from_user.id:
-        return await q.answer("Order nahi mila", show_alert=True)
+    if not o or o["uid"] != uid:
+        return await temp(uid, "⚠️ " + sc("order not found."))
     if o["status"] == "paid":
-        return await q.answer("Already verified ✅", show_alert=True)
+        return await temp(uid, "✅ " + sc("this order is already verified."))
     if o["status"] != "pending":
-        return await q.answer("Yeh order band ho chuka hai.", show_alert=True)
+        return await temp(uid, "⚠️ " + sc("this order is closed."))
     if time.time() - o["ts"] > PAY_WINDOW:
         await C.db.orders.update_one({"_id": oid}, {"$set": {"status": "expired"}})
-        await q.answer()
-        return await q.message.edit_caption("⌛ Order expire ho gaya. Link se dobara try karo.")
+        return await q.message.edit_caption("⌛ " + sc("order expired. please open the link again."))
     earlier = await C.db.orders.find_one({"mode": "auto", "status": "pending", "amount": o["amount"],
                                           "ts": {"$lt": o["ts"], "$gt": time.time() - PAY_WINDOW}})
     if earlier:
-        return await q.answer("⏳ Same amount ka ek aur order pehle se verify ho raha hai. "
-                              "Thodi der baad dobara try karo.", show_alert=True)
-    await q.answer("🔎 Checking payment...")
-    c = await cfg()
+        return await temp(uid, "⏳ " + sc("another order with the same amount is being verified. try again shortly."))
+    if oid in verifying:
+        return
+    verifying.add(oid)
     try:
-        hits = await asyncio.to_thread(check_mail, c, o["ts"])
-    except Exception as e:
-        print("imap error", e)
-        await log(f"⚠️ IMAP error on verify (order {oid}): {e}")
-        return await app.send_message(q.from_user.id, "⚠️ Verification mein dikkat aayi, thodi der baad try karo.")
-    for amts, key, _ in hits:
-        if not any(abs(a - o["amount"]) < 0.005 for a in amts):
-            continue
+        spin = await app.send_message(uid, f"{FRAMES[0]} " + sc("verifying payment"))
+        c = await cfg()
+        task = asyncio.create_task(asyncio.to_thread(check_mail, c, o["ts"]))
+        i = 0
+        while not task.done() and i < 60:
+            await asyncio.sleep(1.1)
+            i += 1
+            try:
+                await spin.edit_text(f"{FRAMES[i % 8]} " + sc("verifying payment") + "." * (i % 4))
+            except Exception:
+                pass
         try:
-            await C.db.used_utr.insert_one({"_id": key, "oid": oid})
-        except DuplicateKeyError:
-            continue
-        r = await C.db.orders.update_one({"_id": oid, "status": "pending"},
-                                         {"$set": {"status": "paid", "utr": key}})
-        if r.modified_count:
-            await q.message.delete()
-            await log(f"💰 Auto payment verified\nOrder {oid} | ₹{fmt(o['amount'])} | UTR/ID {key}\nUser: {o['uid']}")
-            return await deliver(o["uid"], o["item"])
-    await log(f"❌ Verify failed (not found): order {oid}, ₹{fmt(o['amount'])}, mails checked: {len(hits)}")
-    await app.send_message(q.from_user.id, "❌ Payment abhi nahi mila. Pay karke 1 minute baad dobara Verify dabao.")
+            hits = await asyncio.wait_for(task, 15)
+        except Exception as e:
+            print("imap error", e)
+            await log(f"⚠️ IMAP error on verify (order {oid}): {e}")
+            await spin.edit_text("⚠️ " + sc("verification error. please try again in a moment."))
+            return schedule_delete(spin, 30)
+        for amts, key, _ in hits:
+            if not any(abs(a - o["amount"]) < 0.005 for a in amts):
+                continue
+            try:
+                await C.db.used_utr.insert_one({"_id": key, "oid": oid})
+            except DuplicateKeyError:
+                continue
+            r = await C.db.orders.update_one({"_id": oid, "status": "pending"},
+                                             {"$set": {"status": "paid", "utr": key}})
+            if r.modified_count:
+                await spin.delete()
+                await q.message.delete()
+                await log(f"💰 Auto payment verified\nOrder {oid} | ₹{fmt(o['amount'])} | UTR/ID {key}\nUser: {o['uid']}")
+                return await deliver(o["uid"], o["item"])
+        await log(f"❌ Verify failed (not found): order {oid}, ₹{fmt(o['amount'])}, mails checked: {len(hits)}")
+        await spin.edit_text("❌ " + sc("not verified yet.") + "\n"
+                             + sc(f"make sure you paid exactly ₹{fmt(o['amount'])}, wait a minute and tap verify again."))
+        schedule_delete(spin, 30)
+    finally:
+        verifying.discard(oid)
 
 
 # ---------------- manual payment ----------------
@@ -207,19 +233,20 @@ async def user_verify(cl, q):
 async def user_manual(cl, q):
     c = await cfg()
     if not c["manual_on"] or not c["upi_id"]:
-        return await q.answer("Manual payment abhi available nahi hai.", show_alert=True)
+        return await q.answer("⚠️ " + sc("manual payment is not available right now."), show_alert=True)
     it = await C.db.items.find_one({"_id": q.data.split(":")[2]})
     if not it:
-        return await q.answer("Product nahi mila", show_alert=True)
+        return await q.answer(sc("product not found"), show_alert=True)
     await q.answer()
     uid = q.from_user.id
     oid = secrets.token_hex(4)
     await C.db.orders.insert_one({"_id": oid, "uid": uid, "item": it["_id"], "amount": it["price"],
                                   "mode": "manual", "status": "awaiting", "ts": time.time()})
     state[uid] = {"step": "shot", "oid": oid}
-    await app.send_photo(uid, make_qr(upi_link(c, float(it["price"]), oid)), caption=(
-        f"🧾 **Manual Payment**\n📦 {it['title']}\n💰 Amount: **₹{fmt(it['price'])}**\n"
-        f"🏦 UPI: `{c['upi_id']}`\n\nPay karke payment ka **screenshot** yahin bhejo."))
+    await app.send_photo(uid, make_qr(upi_link(c, float(it["price"]), oid)), reply_markup=IKM([dev_row()]),
+                         caption=(f"🧾 **{sc('manual payment')}**\n📦 {sc('item')}: {it['title']}\n"
+                                  f"💰 {sc('amount')}: **₹{fmt(it['price'])}**\n🏦 {sc('upi id')}: `{c['upi_id']}`\n\n"
+                                  + sc("pay, then send the payment screenshot here.")))
 
 
 @app.on_message(filters.private & ~filters.command(CMDS), group=2)
@@ -229,7 +256,7 @@ async def shot(cl, m):
     if not st or st["step"] != "shot":
         return
     if not m.photo:
-        return await m.reply("📸 Payment ka screenshot (photo) bhejo.")
+        return await m.reply("📸 " + sc("please send the payment screenshot (photo)."))
     o = await C.db.orders.find_one({"_id": st["oid"]})
     await C.db.orders.update_one({"_id": o["_id"]}, {"$set": {"status": "review"}})
     c = await cfg()
@@ -245,7 +272,7 @@ async def shot(cl, m):
             pass
     state.pop(uid, None)
     await log(f"🧾 Manual screenshot received: order {o['_id']} from {user_line(m.from_user)}")
-    await m.reply("⏳ Screenshot admin ko bhej diya. Approve hote hi file mil jayegi.")
+    await m.reply("⏳ " + sc("screenshot sent to the admin. you will get your files once approved."))
 
 
 @app.on_callback_query(filters.regex(r"^m:"))
@@ -265,4 +292,4 @@ async def manual_decide(cl, q):
     if act == "ok":
         await deliver(o["uid"], o["item"])
     else:
-        await app.send_message(o["uid"], "❌ Aapka payment reject ho gaya. Sahi screenshot ke saath dobara try karo.")
+        await app.send_message(o["uid"], "❌ " + sc("your payment was rejected. please try again with a valid screenshot."))
