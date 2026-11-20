@@ -1,8 +1,7 @@
 """Products / files: save, link, delivery, /start storefront."""
-import re, secrets
+import secrets
 from pyrogram import filters
-from pyrogram.types import (InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB,
-                            InlineQueryResultArticle, InputTextMessageContent)
+from pyrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB
 import core as C
 from core import app, state, CMDS, cfg, is_admin, fmt, fid, log, user_line, sc, dev_row
 
@@ -37,7 +36,7 @@ async def send_welcome(m):
     c = await cfg()
     name = m.from_user.first_name or "friend"
     text = (c["welcome_text"] or DEFAULT_WELCOME).replace("{name}", name)
-    kb = IKM([[IKB("🔎 " + sc("search extra episodes"), switch_inline_query_current_chat="")], dev_row()])
+    kb = IKM([dev_row()])
     if c["welcome_photo"]:
         try:
             if len(text) <= 1000:
@@ -56,25 +55,6 @@ def card_text(it):
             + f"💰 {sc('price')}: **₹{fmt(it['price'])}**\n"
             f"📁 {sc('files')}: {len(it['files'])}\n\n"
             + sc("share extra episodes of any story — get any link & channel access, delivered instantly."))
-
-
-@app.on_inline_query()
-async def inline_search(cl, q):
-    """@botname <naam / episode> — extra episodes search (BotFather mein /setinline ON karo)."""
-    words = [w for w in re.split(r"\s+", q.query.strip()) if w][:6]
-    flt = {"$and": [{"$or": [{"title": {"$regex": re.escape(w), "$options": "i"}},
-                             {"desc": {"$regex": re.escape(w), "$options": "i"}}]} for w in words]} if words else {}
-    items = await C.db.items.find(flt).sort("_id", -1).to_list(20)
-    results = []
-    for it in items:
-        kb = IKM([[IKB("🛒 " + sc("get this"), url=f"https://t.me/{C.BOT_USERNAME}?start=item_{it['_id']}")], dev_row()])
-        sub = (f"{it['desc']} • " if it.get("desc") else "") + f"₹{fmt(it['price'])}"
-        results.append(InlineQueryResultArticle(
-            title=it["title"], description=sub,
-            input_message_content=InputTextMessageContent(card_text(it)), reply_markup=kb))
-    await q.answer(results, cache_time=5, is_personal=False,
-                   switch_pm_text="" if results else sc("no episodes found"),
-                   switch_pm_parameter="" if results else "start")
 
 
 @app.on_message(filters.command("start") & filters.private)
