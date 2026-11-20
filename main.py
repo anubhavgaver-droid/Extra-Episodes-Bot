@@ -490,7 +490,17 @@ async def main():
     global db, BOT_USERNAME
     db = AsyncIOMotorClient(MONGO_URI)["paybot"]
     await app.start()
-    BOT_USERNAME = (await app.get_me()).username
+    me = await app.get_me()
+    BOT_USERNAME = me.username or ""
+    if not BOT_USERNAME:  # purane Pyrogram par kabhi username None aata hai
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe") as resp:
+                    BOT_USERNAME = (await resp.json())["result"].get("username", "")
+        except Exception as e:
+            print("getMe error", e)
+    BOT_USERNAME = BOT_USERNAME or os.environ.get("BOT_USERNAME", "")
     # Render web service: PORT par health server (default 10000)
     port = int(os.environ.get("PORT", 10000))
     a = web.Application()
@@ -499,7 +509,7 @@ async def main():
     await r.setup()
     await web.TCPSite(r, "0.0.0.0", port).start()
     asyncio.create_task(keep_alive())
-    print("Bot started as @" + BOT_USERNAME, "| port", port)
+    print(f"Bot started as @{BOT_USERNAME} | port {port}")
     await idle()
     await app.stop()
 
