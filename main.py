@@ -470,18 +470,36 @@ async def health(_):
     return web.Response(text="ok")
 
 
+async def keep_alive():
+    # Render free tier 15 min idle par sleep ho jata hai; yeh khud ko har 10 min ping karta hai.
+    # Render apne aap RENDER_EXTERNAL_URL set karta hai. Extra UptimeRobot ping bhi laga sakte ho.
+    url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("APP_URL")
+    if not url:
+        return
+    import aiohttp
+    while True:
+        await asyncio.sleep(600)
+        try:
+            async with aiohttp.ClientSession() as s:
+                await s.get(url, timeout=aiohttp.ClientTimeout(total=20))
+        except Exception as e:
+            print("keep-alive error", e)
+
+
 async def main():
     global db, BOT_USERNAME
     db = AsyncIOMotorClient(MONGO_URI)["paybot"]
     await app.start()
     BOT_USERNAME = (await app.get_me()).username
-    if os.environ.get("PORT"):  # Render web service ke liye
-        a = web.Application()
-        a.router.add_get("/", health)
-        r = web.AppRunner(a)
-        await r.setup()
-        await web.TCPSite(r, "0.0.0.0", int(os.environ["PORT"])).start()
-    print("Bot started as @" + BOT_USERNAME)
+    # Render web service: PORT par health server (default 10000)
+    port = int(os.environ.get("PORT", 10000))
+    a = web.Application()
+    a.router.add_get("/", health)
+    r = web.AppRunner(a)
+    await r.setup()
+    await web.TCPSite(r, "0.0.0.0", port).start()
+    asyncio.create_task(keep_alive())
+    print("Bot started as @" + BOT_USERNAME, "| port", port)
     await idle()
     await app.stop()
 
