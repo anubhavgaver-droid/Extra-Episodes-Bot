@@ -1,7 +1,8 @@
 """Products / files: save, link, delivery, /start storefront."""
-import secrets
+import re, secrets
 from pyrogram import filters
-from pyrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB
+from pyrogram.types import (InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB,
+                            InlineQueryResultArticle, InputTextMessageContent)
 import core as C
 from core import app, state, CMDS, cfg, is_admin, fmt, fid, log, user_line, sc, dev_row
 
@@ -36,7 +37,7 @@ async def send_welcome(m):
     c = await cfg()
     name = m.from_user.first_name or "friend"
     text = (c["welcome_text"] or DEFAULT_WELCOME).replace("{name}", name)
-    kb = IKM([dev_row()])
+    kb = IKM([[IKB("🔎 " + sc("search extra episodes"), switch_inline_query_current_chat="")], dev_row()])
     if c["welcome_photo"]:
         try:
             if len(text) <= 1000:
@@ -45,6 +46,35 @@ async def send_welcome(m):
         except Exception as e:
             print("welcome photo error", e)
     await m.reply(text, reply_markup=kb)
+
+
+def card_text(it):
+    desc = it.get("desc")
+    return ("✦ " + sc("extra episode sharing") + " ✦\n\n"
+            f"📦 **{it['title']}**\n"
+            + (f"🎞 {sc('episodes')}: **{desc}**\n" if desc else "")
+            + f"💰 {sc('price')}: **₹{fmt(it['price'])}**\n"
+            f"📁 {sc('files')}: {len(it['files'])}\n\n"
+            + sc("share extra episodes of any story — get any link & channel access, delivered instantly."))
+
+
+@app.on_inline_query()
+async def inline_search(cl, q):
+    """@botname <naam / episode> — extra episodes search (BotFather mein /setinline ON karo)."""
+    words = [w for w in re.split(r"\s+", q.query.strip()) if w][:6]
+    flt = {"$and": [{"$or": [{"title": {"$regex": re.escape(w), "$options": "i"}},
+                             {"desc": {"$regex": re.escape(w), "$options": "i"}}]} for w in words]} if words else {}
+    items = await C.db.items.find(flt).sort("_id", -1).to_list(20)
+    results = []
+    for it in items:
+        kb = IKM([[IKB("🛒 " + sc("get this"), url=f"https://t.me/{C.BOT_USERNAME}?start=item_{it['_id']}")], dev_row()])
+        sub = (f"{it['desc']} • " if it.get("desc") else "") + f"₹{fmt(it['price'])}"
+        results.append(InlineQueryResultArticle(
+            title=it["title"], description=sub,
+            input_message_content=InputTextMessageContent(card_text(it)), reply_markup=kb))
+    await q.answer(results, cache_time=5, is_personal=False,
+                   switch_pm_text="" if results else sc("no episodes found"),
+                   switch_pm_parameter="" if results else "start")
 
 
 @app.on_message(filters.command("start") & filters.private)
@@ -60,13 +90,7 @@ async def start(cl, m):
             return await m.reply("❌ " + sc("this link is invalid or expired."))
         kb = IKM([[IKB("⚡ " + sc("automatic"), callback_data=f"u:auto:{it['_id']}"),
                    IKB("🧾 " + sc("manual"), callback_data=f"u:man:{it['_id']}")], dev_row()])
-        return await m.reply(
-            "✦ " + sc("extra episode sharing") + " ✦\n\n"
-            f"📦 **{it['title']}**\n"
-            f"💰 {sc('price')}: **₹{fmt(it['price'])}**\n"
-            f"📁 {sc('files')}: {len(it['files'])}\n\n"
-            + sc("share extra episodes of any story — get any link & channel access, delivered instantly.")
-            + "\n\n" + sc("choose your payment method") + " 👇", reply_markup=kb)
+        return await m.reply(card_text(it) + "\n\n" + sc("choose your payment method") + " 👇", reply_markup=kb)
     await send_welcome(m)
 
 
@@ -94,7 +118,7 @@ async def file_cb(cl, q):
         items = await C.db.items.find().sort("_id", -1).to_list(20)
         if not items:
             return await q.message.reply("Koi product nahi hai.")
-        txt = "\n".join(f"• {i['title']} — ₹{fmt(i['price'])} ({len(i['files'])} files)\n"
+        txt = "\n".join(f"• {i['title']}" + (f" [{i['desc']}]" if i.get("desc") else "") + f" — ₹{fmt(i['price'])} ({len(i['files'])} files)\n"
                         f"  https://t.me/{C.BOT_USERNAME}?start=item_{i['_id']}" for i in items)
         kb = IKM([[IKB(f"🗑 {i['title'][:30]}", callback_data=f"a:del:{i['_id']}")] for i in items])
         return await q.message.reply(txt, reply_markup=kb, disable_web_page_preview=True)
@@ -108,7 +132,7 @@ async def file_cb(cl, q):
 async def file_flow(cl, m):
     uid = m.from_user.id
     st = state.get(uid)
-    if not st or st["step"] not in ("files", "price", "title") or not await is_admin(uid):
+    if not st or st["step"] not in ("files", "price", "title", "desc") or not await is_admin(uid):
         return
     step, txt = st["step"], (m.text or "").strip()
     if step == "files":
@@ -125,9 +149,15 @@ async def file_flow(cl, m):
         st["step"] = "title"
         return await m.reply("📝 Product ka naam likho.")
     if step == "title":
+        st["title"] = txt
+        st["step"] = "desc"
+        return await m.reply("🎞 Episode details bhejo, jaise `Ep 1 to 10` ya `Episode 1`.\nSkip karne ke liye `-` bhejo.")
+    if step == "desc":
+        desc = "" if txt == "-" else txt
         iid = secrets.token_urlsafe(6)
-        await C.db.items.insert_one({"_id": iid, "title": txt, "price": st["price"], "files": st["files"]})
+        await C.db.items.insert_one({"_id": iid, "title": st["title"], "desc": desc,
+                                     "price": st["price"], "files": st["files"]})
         state.pop(uid, None)
-        await log(f"📦 Product added: {txt} (₹{fmt(st['price'])}, {len(st['files'])} files) by {uid}")
+        await log(f"📦 Product added: {st['title']} [{desc or '-'}] (₹{fmt(st['price'])}, {len(st['files'])} files) by {uid}")
         await m.reply(f"✅ Product ban gaya!\n\n🔗 https://t.me/{C.BOT_USERNAME}?start=item_{iid}",
                       disable_web_page_preview=True)
