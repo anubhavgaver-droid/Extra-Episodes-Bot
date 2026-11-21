@@ -25,7 +25,12 @@ state = {}           # uid -> {"step": ...}
 
 DEFAULTS = dict(auto_on=False, maint=False, manual_on=True, upi_id="", upi_name="",
                 gmail="", app_pw="", sender="", admins=[], log_chat=0, last_start=0,
-                welcome_photo="", welcome_text="")
+                welcome_photo="", welcome_text="", miniapp_on=False)
+
+
+def base_url():
+    """Public https URL of this service (Render sets RENDER_EXTERNAL_URL automatically)."""
+    return (os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("APP_URL") or "").rstrip("/")
 
 
 def ist(ts=None):

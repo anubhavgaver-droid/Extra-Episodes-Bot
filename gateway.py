@@ -9,7 +9,7 @@ from pyrogram import filters
 from pyrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB
 import core as C
 from core import (app, state, CMDS, PAY_WINDOW, fernet, OWNER_ID, cfg, is_admin, fmt, log, ist, user_line,
-                  sc, temp, schedule_delete, dev_row)
+                  sc, temp, schedule_delete, dev_row, base_url)
 from file import deliver
 
 
@@ -129,6 +129,47 @@ FRAMES = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]  # gho
 verifying = set()
 
 
+async def create_auto_order(uid, it):
+    oid = secrets.token_hex(6)
+    amount = float(it["price"])
+    await C.db.orders.insert_one({"_id": oid, "uid": uid, "item": it["_id"], "amount": amount,
+                                  "mode": "auto", "status": "pending", "ts": time.time()})
+    return oid, amount
+
+
+async def precheck(o):
+    """None = verify kar sakte hain; warna 'paid' | 'closed' | 'expired' | 'busy'."""
+    if o["status"] == "paid":
+        return "paid"
+    if o["status"] != "pending":
+        return "closed"
+    if time.time() - o["ts"] > PAY_WINDOW:
+        await C.db.orders.update_one({"_id": o["_id"]}, {"$set": {"status": "expired"}})
+        return "expired"
+    earlier = await C.db.orders.find_one({"mode": "auto", "status": "pending", "amount": o["amount"],
+                                          "ts": {"$lt": o["ts"], "$gt": time.time() - PAY_WINDOW}})
+    return "busy" if earlier else None
+
+
+async def claim_payment(o, hits):
+    """Mails mein amount + UTR match ho to order paid mark karo. True = payment mil gaya."""
+    oid = o["_id"]
+    for amts, key, _ in hits:
+        if not any(abs(a - o["amount"]) < 0.005 for a in amts):
+            continue
+        try:
+            await C.db.used_utr.insert_one({"_id": key, "oid": oid})
+        except DuplicateKeyError:
+            continue
+        r = await C.db.orders.update_one({"_id": oid, "status": "pending"},
+                                         {"$set": {"status": "paid", "utr": key}})
+        if r.modified_count:
+            await log(f"💰 Auto payment verified\nOrder {oid} | ₹{fmt(o['amount'])} | UTR/ID {key}\nUser: {o['uid']}")
+            return True
+    await log(f"❌ Verify failed (not found): order {oid}, ₹{fmt(o['amount'])}, mails checked: {len(hits)}")
+    return False
+
+
 @app.on_callback_query(filters.regex(r"^u:auto:"))
 async def user_auto(cl, q):
     c = await cfg()
@@ -141,19 +182,19 @@ async def user_auto(cl, q):
     await q.answer()
     uid = q.from_user.id
     wait = await app.send_message(uid, "⏳ " + sc("invoice is generating, please wait..."))
-    amount = float(it["price"])
-    oid = secrets.token_hex(4)
-    await C.db.orders.insert_one({"_id": oid, "uid": uid, "item": it["_id"], "amount": amount,
-                                  "mode": "auto", "status": "pending", "ts": time.time()})
+    oid, amount = await create_auto_order(uid, it)
     qr = make_qr(upi_link(c, amount, oid))
     await wait.delete()
-    kb = IKM([[IKB("✅ " + sc("verify payment"), callback_data=f"u:ver:{oid}")],
-              [IKB("✖️ " + sc("cancel"), callback_data=f"u:cx:{oid}")], dev_row()])
-    await app.send_photo(uid, qr, reply_markup=kb, caption=(
+    rows = [[IKB("✅ " + sc("verify payment"), callback_data=f"u:ver:{oid}")]]
+    base = base_url()
+    if base.startswith("https://"):  # UPI app chooser page (Pay with UPI)
+        rows.append([IKB("💳 " + sc("pay with upi"), url=f"{base}/pay/{oid}")])
+    rows += [[IKB("✖️ " + sc("cancel"), callback_data=f"u:cx:{oid}")], dev_row()]
+    await app.send_photo(uid, qr, reply_markup=IKM(rows), caption=(
         f"🧾 {sc('order')} `{oid}`\n📦 {sc('item')}: {it['title']}\n"
         f"💰 {sc('amount')}: **₹{amount:.2f}**\n🏦 {sc('upi id')}: `{c['upi_id']}`\n"
         f"⏱ {sc('valid for 10 minutes')}\n\n"
-        + sc("scan the qr & pay the exact amount, then tap verify.")))
+        + sc("tap pay with upi (or scan the qr), then tap verify.")))
     await log(f"🧾 Auto order {oid}: {user_line(q.from_user)} → {it['title']} ₹{fmt(amount)}")
 
 
@@ -173,16 +214,14 @@ async def user_verify(cl, q):
     o = await C.db.orders.find_one({"_id": oid})
     if not o or o["uid"] != uid:
         return await temp(uid, "⚠️ " + sc("order not found."))
-    if o["status"] == "paid":
+    st = await precheck(o)
+    if st == "paid":
         return await temp(uid, "✅ " + sc("this order is already verified."))
-    if o["status"] != "pending":
+    if st == "closed":
         return await temp(uid, "⚠️ " + sc("this order is closed."))
-    if time.time() - o["ts"] > PAY_WINDOW:
-        await C.db.orders.update_one({"_id": oid}, {"$set": {"status": "expired"}})
+    if st == "expired":
         return await q.message.edit_caption("⌛ " + sc("order expired. please open the link again."))
-    earlier = await C.db.orders.find_one({"mode": "auto", "status": "pending", "amount": o["amount"],
-                                          "ts": {"$lt": o["ts"], "$gt": time.time() - PAY_WINDOW}})
-    if earlier:
+    if st == "busy":
         return await temp(uid, "⏳ " + sc("another order with the same amount is being verified. try again shortly."))
     if oid in verifying:
         return
@@ -206,21 +245,10 @@ async def user_verify(cl, q):
             await log(f"⚠️ IMAP error on verify (order {oid}): {e}")
             await spin.edit_text("⚠️ " + sc("verification error. please try again in a moment."))
             return schedule_delete(spin, 30)
-        for amts, key, _ in hits:
-            if not any(abs(a - o["amount"]) < 0.005 for a in amts):
-                continue
-            try:
-                await C.db.used_utr.insert_one({"_id": key, "oid": oid})
-            except DuplicateKeyError:
-                continue
-            r = await C.db.orders.update_one({"_id": oid, "status": "pending"},
-                                             {"$set": {"status": "paid", "utr": key}})
-            if r.modified_count:
-                await spin.delete()
-                await q.message.delete()
-                await log(f"💰 Auto payment verified\nOrder {oid} | ₹{fmt(o['amount'])} | UTR/ID {key}\nUser: {o['uid']}")
-                return await deliver(o["uid"], o["item"])
-        await log(f"❌ Verify failed (not found): order {oid}, ₹{fmt(o['amount'])}, mails checked: {len(hits)}")
+        if await claim_payment(o, hits):
+            await spin.delete()
+            await q.message.delete()
+            return await deliver(o["uid"], o["item"])
         await spin.edit_text("❌ " + sc("not verified yet.") + "\n"
                              + sc(f"make sure you paid exactly ₹{fmt(o['amount'])}, wait a minute and tap verify again."))
         schedule_delete(spin, 30)
@@ -229,6 +257,20 @@ async def user_verify(cl, q):
 
 
 # ---------------- manual payment ----------------
+async def begin_manual(uid, it):
+    c = await cfg()
+    if not c["manual_on"] or not c["upi_id"]:
+        return await temp(uid, "⚠️ " + sc("manual payment is not available right now."))
+    oid = secrets.token_hex(4)
+    await C.db.orders.insert_one({"_id": oid, "uid": uid, "item": it["_id"], "amount": it["price"],
+                                  "mode": "manual", "status": "awaiting", "ts": time.time()})
+    state[uid] = {"step": "shot", "oid": oid}
+    await app.send_photo(uid, make_qr(upi_link(c, float(it["price"]), oid)), reply_markup=IKM([dev_row()]),
+                         caption=(f"🧾 **{sc('manual payment')}**\n📦 {sc('item')}: {it['title']}\n"
+                                  f"💰 {sc('amount')}: **₹{fmt(it['price'])}**\n🏦 {sc('upi id')}: `{c['upi_id']}`\n\n"
+                                  + sc("pay, then send the payment screenshot here.")))
+
+
 @app.on_callback_query(filters.regex(r"^u:man:"))
 async def user_manual(cl, q):
     c = await cfg()
@@ -238,15 +280,7 @@ async def user_manual(cl, q):
     if not it:
         return await q.answer(sc("product not found"), show_alert=True)
     await q.answer()
-    uid = q.from_user.id
-    oid = secrets.token_hex(4)
-    await C.db.orders.insert_one({"_id": oid, "uid": uid, "item": it["_id"], "amount": it["price"],
-                                  "mode": "manual", "status": "awaiting", "ts": time.time()})
-    state[uid] = {"step": "shot", "oid": oid}
-    await app.send_photo(uid, make_qr(upi_link(c, float(it["price"]), oid)), reply_markup=IKM([dev_row()]),
-                         caption=(f"🧾 **{sc('manual payment')}**\n📦 {sc('item')}: {it['title']}\n"
-                                  f"💰 {sc('amount')}: **₹{fmt(it['price'])}**\n🏦 {sc('upi id')}: `{c['upi_id']}`\n\n"
-                                  + sc("pay, then send the payment screenshot here.")))
+    await begin_manual(q.from_user.id, it)
 
 
 @app.on_message(filters.private & ~filters.command(CMDS), group=2)

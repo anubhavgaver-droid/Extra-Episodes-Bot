@@ -1,9 +1,9 @@
 """Products / files: save, link, delivery, /start storefront."""
 import secrets
 from pyrogram import filters
-from pyrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB
+from pyrogram.types import InlineKeyboardMarkup as IKM, InlineKeyboardButton as IKB, WebAppInfo
 import core as C
-from core import app, state, CMDS, cfg, is_admin, fmt, fid, log, user_line, sc, dev_row
+from core import app, state, CMDS, cfg, is_admin, fmt, fid, log, user_line, sc, dev_row, base_url
 
 
 async def deliver(uid, item_id):
@@ -64,10 +64,21 @@ async def start(cl, m):
     r = await C.db.users.update_one({"_id": u.id}, {"$set": {"name": user_line(u)}}, upsert=True)
     if r.upserted_id is not None:  # log sirf pehli baar (naya user register hone par)
         await log("🆕 New user registered\n" + user_line(u) + (f"\nLink: {arg}" if arg else ""))
+    if arg.startswith("man_"):  # Mini App se "pay manually"
+        from gateway import begin_manual
+        it = await C.db.items.find_one({"_id": arg[4:]})
+        if not it:
+            return await m.reply("❌ " + sc("this link is invalid or expired."))
+        return await begin_manual(u.id, it)
     if arg.startswith("item_"):
         it = await C.db.items.find_one({"_id": arg[5:]})
         if not it:
             return await m.reply("❌ " + sc("this link is invalid or expired."))
+        c = await cfg()
+        base = base_url()
+        if c["miniapp_on"] and base:  # Mini App mode
+            kb = IKM([[IKB("🛍 " + sc("open store"), web_app=WebAppInfo(url=f"{base}/app/{it['_id']}"))], dev_row()])
+            return await m.reply(card_text(it) + "\n\n" + sc("tap below to open the store") + " 👇", reply_markup=kb)
         kb = IKM([[IKB("⚡ " + sc("automatic"), callback_data=f"u:auto:{it['_id']}"),
                    IKB("🧾 " + sc("manual"), callback_data=f"u:man:{it['_id']}")], dev_row()])
         return await m.reply(card_text(it) + "\n\n" + sc("choose your payment method") + " 👇", reply_markup=kb)

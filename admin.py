@@ -17,6 +17,7 @@ async def panel():
         f"💳 Auto Payment: {tick(c['auto_on'])}\n"
         f"🛠 Under Maintenance: {tick(c['maint'])}\n"
         f"🧾 Manual Payment: {tick(c['manual_on'])}\n"
+        f"📱 Mini App Mode: {tick(c['miniapp_on'])}\n"
         f"📧 Gmail: {c['gmail'] or 'not set'} {tick(bool(c['app_pw']))}\n"
         f"💸 UPI: {c['upi_id'] or 'not set'}\n"
         f"📢 Log channel: {tick(bool(c['log_chat']))}\n"
@@ -27,6 +28,7 @@ async def panel():
         [IKB(f"⚡ Auto Payment: {tick(c['auto_on'])}", callback_data="a:auto")],
         [IKB(f"🛠 Under Maintenance: {tick(c['maint'])}", callback_data="a:maint")],
         [IKB(f"🧾 Manual Payment: {tick(c['manual_on'])}", callback_data="a:manual")],
+        [IKB(f"📱 Mini App Mode: {tick(c['miniapp_on'])}", callback_data="a:miniapp")],
         [IKB("📧 Gmail + App Password", callback_data="a:gmail")],
         [IKB("🧪 Test Gmail (Inbox Read)", callback_data="a:test")],
         [IKB("💸 UPI ID / Name", callback_data="a:upi")],
@@ -75,7 +77,7 @@ PROMPTS = {
 }
 
 
-@app.on_callback_query(filters.regex(r"^a:(auto|maint|manual|upi|gmail|wphoto|wtext|addadmin|rmadmin|test|logs|logchat)$"))
+@app.on_callback_query(filters.regex(r"^a:(auto|maint|manual|miniapp|upi|gmail|wphoto|wtext|addadmin|rmadmin|test|logs|logchat)$"))
 async def admin_cb(cl, q):
     uid = q.from_user.id
     if not await is_admin(uid):
@@ -98,6 +100,14 @@ async def admin_cb(cl, q):
     if act == "manual":
         await setcfg(manual_on=not c["manual_on"])
         await q.answer()
+        return await refresh_panel(q)
+    if act == "miniapp":
+        if not c["miniapp_on"] and not C.base_url().startswith("https://"):
+            return await q.answer("Pehle env APP_URL set karo (Render par RENDER_EXTERNAL_URL khud milta hai).",
+                                  show_alert=True)
+        await setcfg(miniapp_on=not c["miniapp_on"])
+        await q.answer()
+        await log(f"⚙️ Mini App mode {'ON' if not c['miniapp_on'] else 'OFF'} by {uid}")
         return await refresh_panel(q)
 
     if act == "test":

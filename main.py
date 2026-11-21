@@ -5,11 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pyrogram import idle
 import core as C
 from core import app, ist, cfg, setcfg, log
-import admin, gateway, file  # noqa: F401  (handlers register ho jate hain)
-
-
-async def health(_):
-    return web.Response(text="ok")
+import admin, gateway, file, webapp  # noqa: F401  (handlers register ho jate hain)
 
 
 async def keep_alive():
@@ -41,9 +37,7 @@ async def main():
     C.BOT_USERNAME = C.BOT_USERNAME or os.environ.get("BOT_USERNAME", "")
 
     port = int(os.environ.get("PORT", 10000))
-    a = web.Application()
-    a.router.add_get("/", health)
-    r = web.AppRunner(a)
+    r = web.AppRunner(webapp.make_app())
     await r.setup()
     await web.TCPSite(r, "0.0.0.0", port).start()
     asyncio.create_task(keep_alive())
