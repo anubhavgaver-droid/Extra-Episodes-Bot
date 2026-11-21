@@ -43,6 +43,8 @@ h1{font-size:26px;line-height:1.15;margin:12px 0 10px}
 .apps{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .app{display:flex;align-items:center;gap:10px;padding:14px 12px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:700;font-size:15px;transition:transform .08s}
 .app:active{transform:scale(.97)}
+button.app{font:inherit;font-weight:700;cursor:pointer;width:100%;text-align:left;color:var(--ink)}
+button.app.any{color:#1b1640;text-align:center}
 .dot{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;font-size:14px;font-weight:700;color:#fff;flex:none}
 .any{grid-column:1/-1;background:var(--amber);color:#1b1640;border-color:transparent;justify-content:center;font-size:16px;padding:16px}
 .hint{font-size:13px;color:var(--muted);margin:12px 0 0;text-align:center}
@@ -125,13 +127,25 @@ async function startPay() {
   } catch (e) { toast('❌ ' + e.message, true); showProduct(); }
 }
 
+const ANDROID = /android/i.test(navigator.userAgent);
 function links(o) {
   const p = `pa=${encodeURIComponent(o.upi_id)}&pn=${encodeURIComponent(o.upi_name || 'Pay')}&am=${Number(o.amount).toFixed(2)}&tn=${o.oid}&cu=INR`;
-  return {gpay: `tez://upi/pay?${p}`, phonepe: `phonepe://pay?${p}`, paytm: `paytmmp://pay?${p}`, any: `upi://pay?${p}`};
+  if (ANDROID) {  // Android Chrome: intent link — bina package ke = system "Pay with" chooser
+    const it = pkg => `intent://pay?${p}#Intent;scheme=upi;${pkg ? 'package=' + pkg + ';' : ''}end`;
+    return {any: it(''), gpay: it('com.google.android.apps.nbu.paisa.user'), phonepe: it('com.phonepe.app'),
+            paytm: it('net.one97.paytm'), bhim: it('in.org.npci.upiapp')};
+  }
+  return {any: `upi://pay?${p}`, gpay: `tez://upi/pay?${p}`, phonepe: `phonepe://pay?${p}`,
+          paytm: `paytmmp://pay?${p}`, bhim: `upi://pay?${p}`};
+}
+
+function openPay(app) {  // Telegram webview custom UPI schemes nahi kholta, isliye browser mein pay page kholte hain
+  const u = location.origin + '/pay/' + encodeURIComponent(ORDER.oid) + '?app=' + app;
+  if (tg && tg.openLink) tg.openLink(u, {try_instant_view: false, try_browser: 'chrome'}); else window.open(u, '_blank');
 }
 
 function showOrder() {
-  const o = ORDER, L = links(o), amt = Number(o.amount).toFixed(2);
+  const o = ORDER, amt = Number(o.amount).toFixed(2);
   $('#view').innerHTML = `
   <section class="card">
     <div class="row muted"><span class="sc">order</span><code>${esc(o.oid)}</code></div>
@@ -142,13 +156,13 @@ function showOrder() {
   <section class="card">
     <p class="h2 sc">choose your upi app</p>
     <div class="apps">
-      <a class="app any" href="${L.any}">💳 <span class="sc">pay with any upi app</span></a>
-      <a class="app" href="${L.gpay}"><span class="dot" style="background:#4285F4">G</span>Google Pay</a>
-      <a class="app" href="${L.phonepe}"><span class="dot" style="background:#5F259F">Pe</span>PhonePe</a>
-      <a class="app" href="${L.paytm}"><span class="dot" style="background:#00B9F1">Pt</span>Paytm</a>
-      <a class="app" href="${L.any}"><span class="dot" style="background:#E86A33">₹</span>BHIM / Other</a>
+      <button class="app any" data-app="any">💳 <span class="sc">pay with any upi app</span></button>
+      <button class="app" data-app="gpay"><span class="dot" style="background:#4285F4">G</span>Google Pay</button>
+      <button class="app" data-app="phonepe"><span class="dot" style="background:#5F259F">Pe</span>PhonePe</button>
+      <button class="app" data-app="paytm"><span class="dot" style="background:#00B9F1">Pt</span>Paytm</button>
+      <button class="app" data-app="bhim"><span class="dot" style="background:#E86A33">₹</span>BHIM</button>
     </div>
-    <p class="hint">App didn't open? <a href="#" id="fb">Tap here</a></p>
+    <p class="hint">Opens in your browser, then launches the UPI app. Or scan the QR below.</p>
     <details><summary class="sc">show qr code &amp; upi id</summary>
       <img class="qr" alt="UPI QR code" src="/api/qr/${encodeURIComponent(o.oid)}">
       <div class="upi"><div><div class="muted sc" style="font-size:13px">upi id</div><code>${esc(o.upi_id)}</code></div><button class="copy" id="copy">Copy</button></div>
@@ -156,7 +170,7 @@ function showOrder() {
   </section>
   <button class="btn primary" id="ver">✅ <span class="sc">i've paid — verify</span></button>
   <button class="btn ghost" id="back">← <span class="sc">back</span></button>`;
-  $('#fb').onclick = e => { e.preventDefault(); const u = location.origin + '/pay/' + o.oid; tg && tg.openLink ? tg.openLink(u) : window.open(u, '_blank'); };
+  document.querySelectorAll('[data-app]').forEach(b => b.onclick = () => openPay(b.dataset.app));
   $('#copy').onclick = async () => {
     try { await navigator.clipboard.writeText(o.upi_id); } catch (e) {}
     $('#copy').textContent = 'Copied ✓'; setTimeout(() => $('#copy').textContent = 'Copy', 1800);

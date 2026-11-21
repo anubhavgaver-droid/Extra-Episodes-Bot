@@ -29,6 +29,7 @@ body{font-family:'Space Grotesk',system-ui,-apple-system,'Segoe UI',Roboto,sans-
 .apps{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .app{display:flex;align-items:center;gap:10px;padding:14px 12px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:700;font-size:15px;transition:transform .08s}
 .app:active{transform:scale(.97)}
+.app.hl{border-color:var(--amber);box-shadow:0 0 0 2px rgba(255,181,71,.35)}
 .dot{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;font-size:14px;font-weight:700;color:#fff;flex:none}
 .any{grid-column:1/-1;background:var(--amber);color:#1b1640;border-color:transparent;justify-content:center;font-size:16px;padding:16px}
 .upi{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(0,0,0,.22)}
@@ -62,9 +63,16 @@ function state(icon, title, text, bot) {
   $('#view').innerHTML = `<div class="card state"><div class="big">${icon}</div><h2 style="margin:0 0 8px">${esc(title)}</h2><p class="note">${esc(text)}</p>${bot ? `<a class="tg" href="https://t.me/${esc(bot)}">Open Telegram ›</a>` : ''}</div>`;
 }
 
+const ANDROID = /android/i.test(navigator.userAgent);
 function links(o) {
   const p = `pa=${encodeURIComponent(o.upi_id)}&pn=${encodeURIComponent(o.upi_name || 'Pay')}&am=${Number(o.amount).toFixed(2)}&tn=${o.oid}&cu=INR`;
-  return {gpay: `tez://upi/pay?${p}`, phonepe: `phonepe://pay?${p}`, paytm: `paytmmp://pay?${p}`, any: `upi://pay?${p}`};
+  if (ANDROID) {  // Android Chrome: intent link — bina package ke = system "Pay with" chooser
+    const it = pkg => `intent://pay?${p}#Intent;scheme=upi;${pkg ? 'package=' + pkg + ';' : ''}end`;
+    return {any: it(''), gpay: it('com.google.android.apps.nbu.paisa.user'), phonepe: it('com.phonepe.app'),
+            paytm: it('net.one97.paytm'), bhim: it('in.org.npci.upiapp')};
+  }
+  return {any: `upi://pay?${p}`, gpay: `tez://upi/pay?${p}`, phonepe: `phonepe://pay?${p}`,
+          paytm: `paytmmp://pay?${p}`, bhim: `upi://pay?${p}`};
 }
 
 function render() {
@@ -80,12 +88,13 @@ function render() {
   <section class="card">
     <p class="h2 sc">choose your upi app</p>
     <div class="apps">
-      <a class="app any" href="${L.any}">💳 <span class="sc">pay with any upi app</span></a>
-      <a class="app" href="${L.gpay}"><span class="dot" style="background:#4285F4">G</span>Google Pay</a>
-      <a class="app" href="${L.phonepe}"><span class="dot" style="background:#5F259F">Pe</span>PhonePe</a>
-      <a class="app" href="${L.paytm}"><span class="dot" style="background:#00B9F1">Pt</span>Paytm</a>
-      <a class="app" href="${L.any}"><span class="dot" style="background:#E86A33">₹</span>BHIM / Other</a>
+      <a class="app any" data-app="any" href="${L.any}">💳 <span class="sc">pay with any upi app</span></a>
+      <a class="app" data-app="gpay" href="${L.gpay}"><span class="dot" style="background:#4285F4">G</span>Google Pay</a>
+      <a class="app" data-app="phonepe" href="${L.phonepe}"><span class="dot" style="background:#5F259F">Pe</span>PhonePe</a>
+      <a class="app" data-app="paytm" href="${L.paytm}"><span class="dot" style="background:#00B9F1">Pt</span>Paytm</a>
+      <a class="app" data-app="bhim" href="${L.bhim}"><span class="dot" style="background:#E86A33">₹</span>BHIM</a>
     </div>
+    <p class="note" style="margin-top:12px;text-align:center;font-size:13px">App not opening? Tap ⋮ → <b>Open in browser</b> (Chrome), then try again.</p>
     <div class="upi"><div><div class="muted sc" style="font-size:13px">upi id</div><code>${esc(O.upi_id)}</code></div><button class="copy" id="copy">Copy</button></div>
   </section>
   <p class="note">After paying, go back to Telegram and tap <b>✅ Verify Payment</b> under your order.</p>
@@ -96,6 +105,11 @@ function render() {
     }
     $('#copy').textContent = 'Copied ✓'; setTimeout(() => $('#copy').textContent = 'Copy', 1800);
   };
+  const want = new URLSearchParams(location.search).get('app');
+  if (want && L[want]) {  // Mini App se aaye ho to chuna hua app highlight + khulne ki koshish
+    const el = document.querySelector(`[data-app="${want}"]`); if (el) el.classList.add('hl');
+    setTimeout(() => { location.href = L[want]; }, 500);
+  }
   end = Date.now() + O.left * 1000;
   const upd = () => {
     const s = Math.max(0, Math.round((end - Date.now()) / 1000));
