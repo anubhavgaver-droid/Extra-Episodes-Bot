@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14123A">
+<title>Pay with UPI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#14123A;--card:#201D5C;--line:rgba(139,124,255,.3);--ink:#F5F3FF;--muted:#B7B1E8;--amber:#FFB547;--violet:#8B7CFF;--ok:#34D399;--bad:#FB7185}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{font-family:'Space Grotesk',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;line-height:1.45;padding:max(18px,env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom))}
+.wrap{max-width:440px;margin:0 auto}
+.sc{font-variant-caps:all-small-caps;letter-spacing:.06em}
+.brand{display:flex;align-items:center;gap:10px;margin:2px 0 18px}
+.brand b{font-size:15px;letter-spacing:.09em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:20px;margin-bottom:14px}
+.muted{color:var(--muted)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.title{font-size:20px;font-weight:700;margin:2px 0 14px}
+.amount{margin:6px 0 4px}
+.amount small{display:block;font-size:15px;color:var(--muted)}
+.amount b{font-size:46px;color:var(--amber);letter-spacing:-.01em;line-height:1.05}
+.timer{display:inline-flex;gap:6px;align-items:center;padding:5px 12px;border-radius:999px;background:rgba(139,124,255,.16);font-size:14px;margin-top:8px}
+.h2{font-size:15px;margin:0 0 12px;color:var(--muted)}
+.apps{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.app{display:flex;align-items:center;gap:10px;padding:14px 12px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:700;font-size:15px;transition:transform .08s}
+.app:active{transform:scale(.97)}
+.dot{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;font-size:14px;font-weight:700;color:#fff;flex:none}
+.any{grid-column:1/-1;background:var(--amber);color:#1b1640;border-color:transparent;justify-content:center;font-size:16px;padding:16px}
+.upi{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(0,0,0,.22)}
+.upi code{font-size:14px;word-break:break-all}
+.copy{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:10px;padding:8px 12px;font:inherit;font-weight:700;font-size:13px;cursor:pointer}
+.note{font-size:14px;color:var(--muted);margin:0}
+.note b{color:var(--ink)}
+.tg{display:block;text-align:center;margin-top:12px;color:var(--amber);font-weight:700;text-decoration:none}
+.state{text-align:center;padding:34px 20px}
+.state .big{font-size:46px;margin-bottom:8px}
+.skel{height:22px;border-radius:8px;background:rgba(255,255,255,.08);margin:10px 0;animation:p 1.2s infinite}
+@keyframes p{50%{opacity:.4}}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="brand">
+    <svg width="38" height="32" viewBox="0 0 380 300" aria-hidden="true"><rect x="78" y="22" width="224" height="150" rx="26" fill="#8B7CFF" opacity=".35"/><rect x="54" y="52" width="248" height="166" rx="28" fill="#8B7CFF" opacity=".65"/><rect x="30" y="86" width="272" height="188" rx="32" fill="#FFB547"/><polygon points="136,132 136,228 224,180" fill="#14123A" stroke="#14123A" stroke-width="16" stroke-linejoin="round"/></svg>
+    <b class="sc">extra episodes</b>
+  </div>
+  <div id="view"><div class="card"><div class="skel"></div><div class="skel" style="width:60%"></div><div class="skel" style="height:60px"></div></div></div>
+</main>
+<script>
+const oid = location.pathname.split('/').pop();
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let O = null, end = 0, tick = null;
+
+function state(icon, title, text, bot) {
+  $('#view').innerHTML = `<div class="card state"><div class="big">${icon}</div><h2 style="margin:0 0 8px">${esc(title)}</h2><p class="note">${esc(text)}</p>${bot ? `<a class="tg" href="https://t.me/${esc(bot)}">Open Telegram ›</a>` : ''}</div>`;
+}
+
+function links(o) {
+  const p = `pa=${encodeURIComponent(o.upi_id)}&pn=${encodeURIComponent(o.upi_name || 'Pay')}&am=${Number(o.amount).toFixed(2)}&tn=${o.oid}&cu=INR`;
+  return {gpay: `tez://upi/pay?${p}`, phonepe: `phonepe://pay?${p}`, paytm: `paytmmp://pay?${p}`, any: `upi://pay?${p}`};
+}
+
+function render() {
+  const L = links(O);
+  const amt = Number(O.amount).toFixed(2);
+  $('#view').innerHTML = `
+  <section class="card">
+    <div class="row muted"><span class="sc">order</span><code>${esc(O.oid)}</code></div>
+    <div class="title" style="margin-top:12px">${esc(O.title)}</div>
+    <div class="amount"><small class="sc">pay exactly</small><b>₹${amt}</b></div>
+    <div class="timer">⏱ <span id="t" class="sc">--:--</span></div>
+  </section>
+  <section class="card">
+    <p class="h2 sc">choose your upi app</p>
+    <div class="apps">
+      <a class="app any" href="${L.any}">💳 <span class="sc">pay with any upi app</span></a>
+      <a class="app" href="${L.gpay}"><span class="dot" style="background:#4285F4">G</span>Google Pay</a>
+      <a class="app" href="${L.phonepe}"><span class="dot" style="background:#5F259F">Pe</span>PhonePe</a>
+      <a class="app" href="${L.paytm}"><span class="dot" style="background:#00B9F1">Pt</span>Paytm</a>
+      <a class="app" href="${L.any}"><span class="dot" style="background:#E86A33">₹</span>BHIM / Other</a>
+    </div>
+    <div class="upi"><div><div class="muted sc" style="font-size:13px">upi id</div><code>${esc(O.upi_id)}</code></div><button class="copy" id="copy">Copy</button></div>
+  </section>
+  <p class="note">After paying, go back to Telegram and tap <b>✅ Verify Payment</b> under your order.</p>
+  <a class="tg" href="https://t.me/${esc(O.bot)}">Open Telegram ›</a>`;
+  $('#copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(O.upi_id); } catch (e) {
+      const t = document.createElement('textarea'); t.value = O.upi_id; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove();
+    }
+    $('#copy').textContent = 'Copied ✓'; setTimeout(() => $('#copy').textContent = 'Copy', 1800);
+  };
+  end = Date.now() + O.left * 1000;
+  const upd = () => {
+    const s = Math.max(0, Math.round((end - Date.now()) / 1000));
+    const el = $('#t'); if (!el) return;
+    el.textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0') + ' left';
+    if (s <= 0) { clearInterval(tick); state('⌛', 'Order expired', 'Please open the product link in Telegram and start again.', O.bot); }
+  };
+  clearInterval(tick); upd(); tick = setInterval(upd, 1000);
+}
+
+(async () => {
+  try {
+    const r = await fetch('/api/order/' + encodeURIComponent(oid));
+    const j = await r.json();
+    if (!r.ok) return state('⚠️', 'Order not found', j.error || 'This payment link is invalid.');
+    O = j;
+    if (O.status === 'paid') return state('✅', 'Already paid', 'Your files have been sent in Telegram.', O.bot);
+    if (O.status !== 'pending') return state('⚠️', 'Order closed', 'This order is no longer active.', O.bot);
+    if (O.left <= 0) return state('⌛', 'Order expired', 'Please open the product link in Telegram and start again.', O.bot);
+    render();
+  } catch (e) { state('⚠️', 'Something went wrong', 'Please check your connection and try again.'); }
+})();
+</script>
+</body>
+</html>
